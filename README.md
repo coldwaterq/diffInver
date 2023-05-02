@@ -1,0 +1,1 @@
+These images were generated using the NSFW filter included with each model. Some models have better or worse implementations of that. So please be aware that you may see content that is NSFW. 
