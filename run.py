@@ -1,6 +1,7 @@
 import torch
-import sys
+import argparse
 from diffusers import StableDiffusionPipeline
+from diffusers.models import AutoencoderKL
 import unicodedata
 from tqdm.auto import tqdm
 import re
@@ -10,16 +11,18 @@ import numpy as np
 start = time.time()
 num_images=16
 
-try:
-    model_id = sys.argv[1]
-    device = sys.argv[2]
-except:
-    print('python run.py MODEL_ID DEVICE [PROMPT_ID]\nex. python run.py "CompVis/stable-diffusion-v1-1" "cuda:0" "[26253]"')
-    exit()
+parser = argparse.ArgumentParser(
+                    prog='ProgramName',
+                    description='What the program does',
+                    epilog='Text at the bottom of help')
+parser.add_argument('model_id')
+parser.add_argument('--device', dest='device', default='cuda')
+parser.add_argument('--target', dest='target')
+parser.add_argument('--autoencoder', dest='autoencoder')
 
-target = None
-if len(sys.argv) > 3:
-    target = sys.argv[3]
+args = parser.parse_args()
+model_id = args.model_id
+device = args.device
 
 def slugify(value, allow_unicode=False):
     """
@@ -38,16 +41,22 @@ def slugify(value, allow_unicode=False):
     return re.sub(r'[-\s]+', '-', value).strip('-_')
 
 with torch.no_grad():
-    folder = slugify(model_id)
-    if target is not None:
-        folder = os.path.join(folder,target)
+    if args.autoencoder is not None:
+        folder = slugify(args.autoencoder)
+    else:
+        folder = slugify(model_id)
+    if args.target is not None:
+        folder = os.path.join(folder,args.target)
     if os.path.exists(folder):
         print("folder already exists")
         exit()
     os.mkdir(folder)
     loss = torch.nn.MSELoss()
-
-    pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+    if args.autoencoder is not None:
+        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16)
+        pipe = StableDiffusionPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.float16)
+    else:
+        pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     pipe = pipe.to(device)
     def safe(images, device, dtype):
         return images, None
@@ -64,16 +73,16 @@ with torch.no_grad():
     pipe.progress_bar = progress
 
     skip = False
-    def test(*args, **kwargs):
+    def test(*funcArgs, **kwargs):
         global maxL
-        ret = step(*args, **kwargs)
+        ret = step(*funcArgs, **kwargs)
         if len(rets) == depth and not skip:
             maxL = 0
             for i in range(num_images):
                 l = loss(rets[0].prev_sample[i],ret.prev_sample[i])
                 maxL = max(maxL, l)
                 if l > minLoss:
-                    if target is None:
+                    if args.target is None:
                         prompt2Latent.append((prompt_pids[i],latents[i].clone()))
                     else:
                         prompt2Latent.append((prompt_pids[0],latents[i].clone()))
@@ -102,9 +111,9 @@ with torch.no_grad():
         torch.manual_seed(se)
         attempts = 5
         imagesPerPrompt = 1
-        if target is not None:
+        if args.target is not None:
             import json
-            prompt_pids = [json.loads(target)]
+            prompt_pids = [json.loads(args.target)]
             prompts = pipe.tokenizer.batch_decode(prompt_pids)
             attempts = 20
             imagesPerPrompt = num_images
@@ -116,7 +125,7 @@ with torch.no_grad():
                 imagesnp = pipe(prompts, latents=latents, num_images_per_prompt=imagesPerPrompt, num_inference_steps=50, output_type="np.array").images
             except AttributeError:
                 pass
-        if len(prompt2Latent) >= num_images or p<=(num_images*2) or target is not None:
+        if len(prompt2Latent) >= num_images or p<=(num_images*2) or args.target is not None:
             skip = True
             tprompt_pids = []
             for j in range(len(prompt2Latent)):
@@ -143,7 +152,7 @@ with torch.no_grad():
                 tprompt_pids = []
             skip = False
             prompt2Latent = []
-        if target is not None:
+        if args.target is not None:
             break
 print(prompt2Latent)
 print(time.time()-start)
